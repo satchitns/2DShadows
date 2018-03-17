@@ -1,0 +1,257 @@
+﻿using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+
+[RequireComponent(typeof(Rigidbody2D))]
+public class DynamicLighting : MonoBehaviour {
+    protected List<Vector3> boundPoints; //stores the corner points of each collider
+    protected List<Vector3> staggeredBoundPoints; //stores two extra points offset a bit from each collider-corner
+    protected List<Vector3> lightBoundary; //stores the light's trigger collider's points
+    protected List<Collider2D> colliders;
+    protected GameObject meshObject;
+    protected Mesh mesh;
+    public float staggerThreshold = 0.001f;
+    public int borderPolySides = 8;
+    public float raycastDistance = 20f;
+    public void Start () {
+        mesh = new Mesh();
+        colliders = new List<Collider2D>();
+        gameObject.layer = LayerMask.NameToLayer("Lights");
+        CreateBoundaryTrigger();
+        InitialColliderSweep();
+        DetectColliderCorners();
+        Rigidbody2D rgdBody = GetComponent<Rigidbody2D>();
+        rgdBody.bodyType = RigidbodyType2D.Kinematic;
+        rgdBody.simulated = true;
+        rgdBody.useFullKinematicContacts = true;
+        meshObject = new GameObject();
+        meshObject.AddComponent<MeshFilter>();
+        meshObject.AddComponent<MeshRenderer>();
+        meshObject.GetComponent<MeshRenderer>().material = LightMaskClass.Instance.lightMaterial;
+        DrawMesh();
+	}
+
+	public void Update () {
+       //if any collider in this object's collider list has moved, update the whole mesh
+       foreach(Collider2D coll in colliders) {
+            if (coll.transform.hasChanged) {
+                    DetectColliderCorners();
+                    DrawMesh();
+                    break;
+            }
+        }
+       if(transform.hasChanged) {
+            DetectColliderCorners();
+            DrawMesh();
+            transform.hasChanged = false;
+        }    
+	}
+
+    public void LateUpdate() {
+        //once the updates for all lights that have the object in it have been called, we can set the 
+        //hasChanged flag to false
+        foreach (Collider2D coll in colliders) {
+            if (coll.transform.hasChanged) {
+                coll.transform.hasChanged = false;
+                break;
+            }
+        }
+    }
+
+    public virtual void DrawMesh() {
+        List<Vector3> meshPoints = new List<Vector3>();
+        mesh.Clear();
+        int[] newTriangles;
+        int counter = 0;
+        //add octagon corners
+       
+        //raycasting to collider corners
+        foreach (Vector2 point in boundPoints) {
+            RaycastHit2D hit;
+            hit = Physics2D.Raycast(transform.position, (Vector3)point - transform.position, raycastDistance, LightMaskClass.Instance.mask);
+            if (hit) {
+                    meshPoints.Add(hit.point);
+            }
+
+        }
+        //raycasting to staggered collider corners
+        foreach (Vector2 point in staggeredBoundPoints) {
+            RaycastHit2D hit;
+            hit = Physics2D.Raycast(transform.position, (Vector3)point - transform.position, raycastDistance, LightMaskClass.Instance.mask);
+
+            if (hit) {
+                  meshPoints.Add(hit.point);
+            }
+            else {
+                //if the staggered point didn't hit anything nice, let's see if it hits our own boundary
+                RaycastHit2D[] hitArray;
+                hitArray = Physics2D.RaycastAll(transform.position , (Vector3)point - transform.position, raycastDistance, ~LightMaskClass.Instance.mask);
+                foreach (RaycastHit2D hitObj in hitArray) {
+                    if (hitObj.transform == transform) {
+                        meshPoints.Add(hitObj.point);
+                        break;
+                    }
+                }
+                /*hit = Physics2D.Raycast(transform.position, (Vector3)point - transform.position, raycastDistance);
+                if (hit) {
+                    if(hit.transform == transform) {
+                        meshPoints.Add(hit.point);
+                      
+                    }
+                }*/
+            }
+
+        }
+        //linecasting to light border constraints (this is so that two lights can tread each other's boundaries -
+        //a raycast would hit either both the triggers or neither of the triggers depending on the mask value,
+        //which would make it useless either way
+        foreach (Vector2 point in lightBoundary) {
+            RaycastHit2D hit;
+                hit = Physics2D.Linecast(transform.position, (Vector3)point, LightMaskClass.Instance.mask);
+                if (!hit) {
+                RaycastHit2D[] hitArray;
+                hitArray = Physics2D.LinecastAll(transform.position, (Vector3)point, ~LightMaskClass.Instance.mask);
+                bool flag = false;
+                foreach (RaycastHit2D hitObj in hitArray) {
+                    if(hitObj.transform == transform) {
+                        flag = true;
+                        meshPoints.Add(hitObj.point);
+                        
+                        break;
+                    }
+                }
+                if(flag == false)
+                    meshPoints.Add(point);
+                }
+                else {
+                    meshPoints.Add(hit.point);
+                }
+            
+        }
+
+        ClockwiseComparer cc = new ClockwiseComparer(transform.position);
+        meshPoints.Sort(cc);    //sorting the points found clockwise
+        meshPoints.Insert(0, transform.position); //inserting center point at zero index, this will be a vertex of every triangle
+
+        //triangle vertices array has to be a multiple of 3, each set of 3 elements forms one triangle
+        newTriangles = new int[(meshPoints.Count - 1)* 3];
+        for(int i = 1; i < meshPoints.Count - 1; i++) {
+            newTriangles[counter++] = 0;
+            newTriangles[counter++] = i;
+            newTriangles[counter++] = i + 1;
+        }
+
+        //forming a final triangle using the last vertex and the first
+        newTriangles[counter++] = 0;
+        newTriangles[counter++] = meshPoints.Count - 1;
+        newTriangles[counter] = 1;
+
+        mesh.vertices = meshPoints.ToArray();
+        mesh.triangles = newTriangles;
+        meshObject.GetComponent<MeshFilter>().mesh = mesh;      
+    }
+
+    public virtual void DetectColliderCorners() {
+        boundPoints = new List<Vector3>();
+        staggeredBoundPoints = new List<Vector3>();
+        lightBoundary = new List<Vector3>();
+        foreach (Collider2D coll in colliders) {
+                if (coll.GetType() == typeof(BoxCollider2D)) {
+                    BoxCollider2D boxColl = (BoxCollider2D)coll;
+                    float top = boxColl.offset.y + (boxColl.size.y / 2f);
+                    float btm = boxColl.offset.y - (boxColl.size.y / 2f);
+                    float left = boxColl.offset.x - (boxColl.size.x / 2f);
+                    float right = boxColl.offset.x + (boxColl.size.x / 2f);
+                    Vector3 topLeft = boxColl.transform.TransformPoint(new Vector3(left, top, 0f));
+                    Vector3 topRight = boxColl.transform.TransformPoint(new Vector3(right, top, 0f));
+                    Vector3 bottomLeft = boxColl.transform.TransformPoint(new Vector3(left, btm, 0f));
+                    Vector3 bottomRight = boxColl.transform.TransformPoint(new Vector3(right, btm, 0f));
+                    boundPoints.Add(topLeft);
+                    boundPoints.Add(topRight);
+                    boundPoints.Add(bottomLeft);
+                    boundPoints.Add(bottomRight);
+                    staggeredBoundPoints.Add(topLeft + transform.right * staggerThreshold);
+                    staggeredBoundPoints.Add(topRight + transform.right * staggerThreshold);
+                    staggeredBoundPoints.Add(bottomLeft + transform.right * staggerThreshold);
+                    staggeredBoundPoints.Add(bottomRight + transform.right * staggerThreshold);
+                    staggeredBoundPoints.Add(topLeft - transform.right * staggerThreshold);
+                    staggeredBoundPoints.Add(topRight - transform.right * staggerThreshold);
+                    staggeredBoundPoints.Add(bottomLeft - transform.right * staggerThreshold);
+                    staggeredBoundPoints.Add(bottomRight - transform.right * staggerThreshold);
+                }
+
+                else if (coll.GetType() == typeof(EdgeCollider2D)) {
+                    EdgeCollider2D edgeColl = (EdgeCollider2D)coll;
+                    foreach (Vector2 point in edgeColl.points) {
+                        boundPoints.Add(edgeColl.transform.TransformPoint(point));
+                            staggeredBoundPoints.Add(edgeColl.transform.TransformPoint(point) - transform.right * staggerThreshold);
+                            staggeredBoundPoints.Add(edgeColl.transform.TransformPoint(point) + transform.right * staggerThreshold);      
+                    }
+                }
+
+                else if (coll.GetType() == typeof(PolygonCollider2D)) {
+                    PolygonCollider2D polyColl = (PolygonCollider2D)coll;
+                    foreach (Vector2 point in polyColl.points) {
+                        boundPoints.Add(polyColl.transform.TransformPoint(point));
+                        staggeredBoundPoints.Add(polyColl.transform.TransformPoint(point) - transform.right * staggerThreshold);
+                        staggeredBoundPoints.Add(polyColl.transform.TransformPoint(point) + transform.right * staggerThreshold);
+                    }
+                }
+
+                //TO ADD : Circle collider if we need one
+            
+        }
+
+
+        //adding the border constraints of this light
+            foreach (Vector2 point in GetComponent<EdgeCollider2D>().points) {
+                lightBoundary.Add(transform.TransformPoint(point));
+            }
+        
+
+
+    }
+
+
+    public virtual void CreateBoundaryTrigger() {
+        
+        EdgeCollider2D triggerBoundary = gameObject.AddComponent<EdgeCollider2D>();
+        triggerBoundary.isTrigger = true;
+        Vector2[] array = new Vector2[borderPolySides+1];
+            for (int i = 0; i < borderPolySides; i++) {
+                array[i] = Vector3.Normalize(Quaternion.AngleAxis(i * (360) / borderPolySides, transform.forward) * (new Vector2(1, 0))) * raycastDistance;
+            }
+            array[borderPolySides] = array[0]; //last point has to coincide with first for closed shape
+        triggerBoundary.points = array;
+
+    }
+
+    public void InitialColliderSweep() {
+        foreach(Collider2D coll in Physics2D.OverlapCircleAll(transform.position, raycastDistance, LightMaskClass.Instance.mask)) {
+                colliders.Add(coll);
+        }
+    }
+
+    public void OnTriggerEnter2D(Collider2D coll) {
+        if (!colliders.Contains(coll)){
+            if (CheckMask(coll.gameObject.layer)) {
+                colliders.Add(coll);
+            }
+        }
+    }
+
+    public void OnTriggerExit2D(Collider2D coll) {
+        if (System.Array.IndexOf(Physics2D.OverlapCircleAll(transform.position, raycastDistance, LightMaskClass.Instance.mask), coll) == -1) {
+            if (colliders.Contains(coll)) {
+                colliders.Remove(coll);
+                DetectColliderCorners();
+                DrawMesh();
+            }
+        }
+    }
+
+    public bool CheckMask(int n) {
+        return ((1 << n) & LightMaskClass.Instance.mask) > 0;
+    }
+}

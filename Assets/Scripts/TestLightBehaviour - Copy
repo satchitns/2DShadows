@@ -1,0 +1,104 @@
+﻿using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class TestLightBehaviour : MonoBehaviour {
+    List<Vector3> boundPoints;
+    GameObject meshObject;
+    Mesh mesh;
+    // Use this for initialization
+    void Start () {
+        mesh = new Mesh();
+        boundPoints = new List<Vector3>();
+		foreach(Collider2D coll in Physics2D.OverlapCircleAll(transform.position, 100)) {
+            if (coll.GetType() == typeof(BoxCollider2D)) {
+                float xHalfSize = coll.bounds.extents.x, yHalfSize = coll.bounds.extents.y;
+                Vector2 center = coll.bounds.center;
+                //have to do differently for each type of collider2D
+                boundPoints.Add(center + new Vector2(xHalfSize, yHalfSize));
+
+                boundPoints.Add(center + new Vector2(-xHalfSize, yHalfSize));
+                boundPoints.Add(center + new Vector2(xHalfSize, -yHalfSize));
+
+                boundPoints.Add(center + new Vector2(-xHalfSize, -yHalfSize));
+            }
+            else if(coll.GetType() == typeof(EdgeCollider2D)) {
+                boundPoints.Add(coll.bounds.min);
+                boundPoints.Add(coll.bounds.max);
+            }
+
+        }
+        meshObject = new GameObject();
+        meshObject.AddComponent<MeshFilter>();
+        meshObject.AddComponent<MeshRenderer>();
+        DrawMesh();
+	}
+	
+	// Update is called once per frame
+	void Update () {
+       DrawMesh();
+	}
+
+    void DrawMesh() {
+        List<Vector3> meshPoints = new List<Vector3>();
+        mesh.Clear();
+        int[] newTriangles;
+        int counter = 0;
+  
+        foreach (Vector2 point in boundPoints) {
+            RaycastHit2D hit;
+            hit = Physics2D.Linecast(transform.position, point);
+   
+           
+            if (hit) {
+               // Debug.DrawLine(transform.position, hit.point, Color.yellow, 400);
+                meshPoints.Add(hit.point);
+                
+            }
+        }
+//Debug.DrawLine(transform.position, new Vector3(0, 0, 0), Color.red, 300);
+    
+        ClockwiseComparer cc = new ClockwiseComparer(transform.position);
+        meshPoints.Sort(cc);    
+        meshPoints.Insert(0, transform.position);
+        newTriangles = new int[(meshPoints.Count - 1)* 3];
+        Vector3[] normals = new Vector3[meshPoints.Count];
+        //newTriangles = new int[] { 0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6 ,7 , 0 , 7, 8, 0, 8, 9, 0, 9, 10, 0, 10, 11};
+        for(int i = 1; i < meshPoints.Count - 2; i++) {
+            newTriangles[counter++] = 0;
+            newTriangles[counter++] = i;
+            newTriangles[counter++] = i + 1;
+            normals[i] = Camera.main.transform.forward * -1;
+        }
+      
+        mesh.vertices = meshPoints.ToArray();
+        mesh.triangles = newTriangles;
+        meshObject.GetComponent<MeshFilter>().mesh = mesh;
+      
+    }
+    /*
+    bool less(Vector2 a, Vector2 b) {
+        if (a.x - transform.position.x >= 0 && b.x - transform.position.x < 0)
+            return true;
+        if (a.x - transform.position.x < 0 && b.x - transform.position.x >= 0)
+            return false;
+        if (a.x - transform.position.x == 0 && b.x - transform.position.x == 0) {
+            if (a.y - transform.position.y >= 0 || b.y - transform.position.y >= 0)
+                return a.y > b.y;
+            return b.y > a.y;
+        }
+        // compute the cross product of vectors (center -> a) x (center -> b)
+        float det = (a.x - transform.position.x) * (b.y - transform.position.y) - (b.x - transform.position.x) * (a.y - transform.position.y);
+        if (det < 0)
+            return true;
+        if (det > 0)
+            return false;
+
+        // points a and b are on the same line from the center
+        // check which point is closer to the center
+        float d1 = (a.x - transform.position.x) * (a.x - transform.position.x) + (a.y - transform.position.y) * (a.y - transform.position.y);
+        float d2 = (b.x - transform.position.x) * (b.x - transform.position.x) + (b.y - transform.position.y) * (b.y - transform.position.y);
+        return d1 > d2;
+
+    }*/
+}
